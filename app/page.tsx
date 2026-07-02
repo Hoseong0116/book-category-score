@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 
+type SearchSource = "naver" | "data4library" | "both";
+
 type BookDoc = {
   bookname: string;
   authors: string;
@@ -50,6 +52,12 @@ const categories = [
   "문학",
 ];
 
+const searchSourceLabels: Record<SearchSource, string> = {
+  naver: "네이버 책 검색",
+  data4library: "도서관 정보나루",
+  both: "둘 다 검색",
+};
+
 function getErrorMessage(data: any, fallback: string) {
   if (data?.detail) {
     return `${data.error || fallback}\n${data.detail}`;
@@ -62,9 +70,56 @@ function getErrorMessage(data: any, fallback: string) {
   return fallback;
 }
 
+function getBookSourceLabel(className: string) {
+  if (className === "ISBN 직접 입력") {
+    return "ISBN 직접 입력";
+  }
+
+  if (className === "네이버 책 검색 결과") {
+    return "네이버";
+  }
+
+  if (className.includes("도서관 정보나루")) {
+    return "정보나루";
+  }
+
+  return "정보나루";
+}
+
+function convertIsbn10ToIsbn13(isbn10: string) {
+  const body = `978${isbn10.slice(0, 9)}`;
+
+  let sum = 0;
+
+  for (let i = 0; i < body.length; i++) {
+    const digit = Number(body[i]);
+    sum += i % 2 === 0 ? digit : digit * 3;
+  }
+
+  const checkDigit = (10 - (sum % 10)) % 10;
+
+  return `${body}${checkDigit}`;
+}
+
+function normalizeIsbnInput(value: string) {
+  const cleaned = value.replace(/[^0-9Xx]/g, "").toUpperCase();
+
+  if (/^97[89][0-9]{10}$/.test(cleaned)) {
+    return cleaned;
+  }
+
+  if (/^[0-9]{9}[0-9X]$/.test(cleaned)) {
+    return convertIsbn10ToIsbn13(cleaned);
+  }
+
+  return "";
+}
+
 export default function Home() {
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState("");
+  const [isbnInput, setIsbnInput] = useState("");
+  const [searchSource, setSearchSource] = useState<SearchSource>("naver");
 
   const [books, setBooks] = useState<BookDoc[]>([]);
   const [selectedBook, setSelectedBook] = useState<BookDoc | null>(null);
@@ -102,11 +157,32 @@ export default function Home() {
         params.set("author", author.trim());
       }
 
+      params.set("source", searchSource);
+
       const response = await fetch(`/api/search-book?${params.toString()}`);
-      const data = await response.json();
+
+      const responseText = await response.text();
+
+      let data: any = null;
+
+      try {
+        data = responseText ? JSON.parse(responseText) : null;
+      } catch {
+        setMessage(
+          `책 검색 API가 JSON이 아닌 응답을 반환했습니다.\n상태 코드: ${
+            response.status
+          }\n응답 내용: ${responseText.slice(0, 500)}`
+        );
+        return;
+      }
 
       if (!response.ok) {
         setMessage(getErrorMessage(data, "책 검색 중 오류가 발생했습니다."));
+        return;
+      }
+
+      if (!data) {
+        setMessage("책 검색 API 응답이 비어 있습니다.");
         return;
       }
 
@@ -117,7 +193,7 @@ export default function Home() {
 
       if (docs.length === 0) {
         setMessage(
-          "검색 결과가 없습니다. 책 제목을 줄이거나 저자명을 빼고 다시 검색해보세요."
+          "검색 결과가 없습니다. 검색 방식을 바꾸거나 책 제목/저자를 줄여서 다시 검색해보세요."
         );
       }
     } catch (error) {
@@ -126,6 +202,37 @@ export default function Home() {
     } finally {
       setLoading(false);
     }
+  }
+
+  function selectBookByIsbn() {
+    const isbn13 = normalizeIsbnInput(isbnInput);
+
+    if (!isbn13) {
+      setMessage(
+        "올바른 ISBN을 입력해주세요. ISBN13 또는 ISBN10을 입력할 수 있습니다."
+      );
+      return;
+    }
+
+    const bookFromIsbn: BookDoc = {
+      bookname: `ISBN 직접 입력 도서 (${isbn13})`,
+      authors: "",
+      publisher: "",
+      publication_year: "",
+      isbn13,
+      class_nm: "ISBN 직접 입력",
+      bookImageURL: "",
+      loan_count: "",
+    };
+
+    setSelectedBook(bookFromIsbn);
+    setBooks([]);
+    setResult(null);
+    setNeedsManualText(false);
+    setManualText("");
+    setMessage(
+      "ISBN이 선택되었습니다. 분석 카테고리를 선택한 뒤 정보나루 키워드로 분석하세요."
+    );
   }
 
   async function analyzeWithData4Library() {
@@ -248,7 +355,7 @@ export default function Home() {
         </h1>
 
         <p className="mt-3 text-gray-600">
-          책 제목과 저자를 기준으로 도서를 검색하고, 선택한 카테고리에 대한
+          책 제목, 저자, ISBN을 기준으로 도서를 찾고 선택한 카테고리에 대한
           적합도 점수를 계산합니다.
         </p>
 
@@ -264,7 +371,7 @@ export default function Home() {
                   searchBooks();
                 }
               }}
-              placeholder="책 제목 예: 넥서스"
+              placeholder="책 제목 예: 왜 나는 너를"
               className="rounded-lg border px-4 py-2"
             />
 
@@ -276,7 +383,7 @@ export default function Home() {
                   searchBooks();
                 }
               }}
-              placeholder="저자 예: 유발 하라리"
+              placeholder="저자 예: 알랭 드 보통"
               className="rounded-lg border px-4 py-2"
             />
 
@@ -289,10 +396,72 @@ export default function Home() {
             </button>
           </div>
 
+          <div className="mt-4">
+            <div className="text-sm font-medium text-gray-700">검색 방식</div>
+
+            <div className="mt-2 grid gap-2 md:grid-cols-3">
+              {(["naver", "data4library", "both"] as SearchSource[]).map(
+                (source) => (
+                  <button
+                    key={source}
+                    type="button"
+                    onClick={() => {
+                      setSearchSource(source);
+                      setBooks([]);
+                      setSelectedBook(null);
+                      setResult(null);
+                      setNeedsManualText(false);
+                      setMessage("");
+                    }}
+                    className={`rounded-lg border px-4 py-2 text-left text-sm ${
+                      searchSource === source
+                        ? "border-black bg-gray-100 font-semibold"
+                        : "border-gray-200 bg-white hover:bg-gray-50"
+                    }`}
+                  >
+                    {searchSourceLabels[source]}
+                  </button>
+                )
+              )}
+            </div>
+          </div>
+
           <p className="mt-3 text-sm text-gray-500">
-            책 제목과 저자를 따로 검색합니다. 출판사명이 검색어와 같아도 책
-            제목/저자 조건에 맞지 않으면 제외됩니다.
+            네이버 책 검색은 빠르고 긴 제목 검색에 강합니다. 도서관 정보나루는
+            대출 수와 도서관 분류를 확인할 때 유용합니다.
           </p>
+
+          <div className="mt-6 border-t pt-5">
+            <h3 className="font-semibold">ISBN 직접 입력</h3>
+
+            <p className="mt-1 text-sm text-gray-500">
+              책 검색이 잘 안 되면 ISBN13 또는 ISBN10을 직접 입력할 수
+              있습니다.
+            </p>
+
+            <div className="mt-3 flex gap-2">
+              <input
+                value={isbnInput}
+                onChange={(event) => setIsbnInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    selectBookByIsbn();
+                  }
+                }}
+                placeholder="예: 9788934972464"
+                className="flex-1 rounded-lg border px-4 py-2"
+              />
+
+              <button
+                type="button"
+                onClick={selectBookByIsbn}
+                disabled={loading}
+                className="rounded-lg bg-gray-800 px-5 py-2 text-white disabled:opacity-50"
+              >
+                ISBN으로 선택
+              </button>
+            </div>
+          </div>
         </section>
 
         {books.length > 0 && (
@@ -316,25 +485,42 @@ export default function Home() {
                       : "border-gray-200 hover:bg-gray-50"
                   }`}
                 >
-                  <div className="font-semibold">{book.bookname}</div>
+                  <div className="flex gap-4">
+                    {book.bookImageURL && (
+                      <img
+                        src={book.bookImageURL}
+                        alt={book.bookname}
+                        className="h-28 w-20 rounded object-cover"
+                      />
+                    )}
 
-                  <div className="mt-1 text-sm text-gray-600">
-                    {book.authors} · {book.publisher} · {book.publication_year}
-                  </div>
+                    <div className="flex-1">
+                      <div className="font-semibold">{book.bookname}</div>
 
-                  <div className="mt-1 text-sm text-gray-500">
-                    ISBN13: {book.isbn13}
-                  </div>
+                      <div className="mt-1 text-sm text-gray-600">
+                        {book.authors} · {book.publisher} ·{" "}
+                        {book.publication_year}
+                      </div>
 
-                  <div className="mt-1 text-sm text-gray-500">
-                    분류: {book.class_nm || "없음"}
-                  </div>
+                      <div className="mt-1 text-sm text-gray-500">
+                        ISBN13: {book.isbn13}
+                      </div>
 
-                  {book.loan_count && (
-                    <div className="mt-1 text-sm text-gray-500">
-                      대출 수: {book.loan_count}
+                      <div className="mt-1 text-sm text-gray-500">
+                        검색 출처: {getBookSourceLabel(book.class_nm)}
+                      </div>
+
+                      <div className="mt-1 text-sm text-gray-500">
+                        분류: {book.class_nm || "없음"}
+                      </div>
+
+                      {book.loan_count && (
+                        <div className="mt-1 text-sm text-gray-500">
+                          대출 수: {book.loan_count}
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
                 </button>
               ))}
             </div>
@@ -344,6 +530,18 @@ export default function Home() {
         {selectedBook && (
           <section className="mt-6 rounded-xl bg-white p-6 shadow">
             <h2 className="text-xl font-semibold">3. 분석 카테고리 선택</h2>
+
+            <div className="mt-3 rounded-lg bg-gray-100 p-4 text-sm text-gray-700">
+              <div className="font-semibold">선택된 도서</div>
+              <div className="mt-1">{selectedBook.bookname}</div>
+              <div className="mt-1">ISBN13: {selectedBook.isbn13}</div>
+              {selectedBook.authors && (
+                <div className="mt-1">저자: {selectedBook.authors}</div>
+              )}
+              <div className="mt-1">
+                선택 방식: {getBookSourceLabel(selectedBook.class_nm)}
+              </div>
+            </div>
 
             <select
               value={targetCategory}

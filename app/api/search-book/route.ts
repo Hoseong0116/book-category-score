@@ -3,17 +3,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
 
-type NaverBookItem = {
-  title?: string;
-  link?: string;
-  image?: string;
-  author?: string;
-  discount?: string;
-  publisher?: string;
-  pubdate?: string;
-  isbn?: string;
-  description?: string;
-};
+type SearchSource = "naver" | "data4library" | "both";
 
 type BookDoc = {
   bookname: string;
@@ -24,6 +14,37 @@ type BookDoc = {
   class_nm: string;
   bookImageURL?: string;
   loan_count?: string;
+};
+
+type NaverBookItem = {
+  title?: string;
+  link?: string;
+  image?: string;
+  author?: string;
+  publisher?: string;
+  pubdate?: string;
+  isbn?: string;
+  description?: string;
+};
+
+type Data4LibraryItem = {
+  doc?: {
+    bookname?: string;
+    authors?: string;
+    publisher?: string;
+    publication_year?: string;
+    isbn13?: string;
+    class_nm?: string;
+    bookImageURL?: string;
+    loan_count?: string;
+  };
+};
+
+type SearchResult = {
+  source: string;
+  query: string;
+  docs: BookDoc[];
+  error?: string;
 };
 
 function stripHtml(value: string) {
@@ -72,6 +93,7 @@ function buildSearchQueries(title: string, author: string) {
   const normalizedAuthor = normalizeText(author);
 
   const titleWords = splitWords(title);
+
   const strippedWords = titleWords
     .map((word) => removeKoreanParticle(word))
     .filter((word) => word.length >= 2);
@@ -163,6 +185,31 @@ function convertNaverBookToDoc(item: NaverBookItem): BookDoc | null {
   };
 }
 
+function convertData4LibraryBookToDoc(item: Data4LibraryItem): BookDoc | null {
+  const doc = item.doc;
+
+  if (!doc) return null;
+
+  const isbn13 = String(doc.isbn13 || "").trim();
+
+  if (!isbn13) return null;
+
+  const bookname = String(doc.bookname || "").trim();
+
+  if (!bookname) return null;
+
+  return {
+    bookname,
+    authors: String(doc.authors || "").trim(),
+    publisher: String(doc.publisher || "").trim(),
+    publication_year: String(doc.publication_year || "").trim(),
+    isbn13,
+    class_nm: String(doc.class_nm || "도서관 정보나루 검색 결과").trim(),
+    bookImageURL: String(doc.bookImageURL || "").trim(),
+    loan_count: String(doc.loan_count || "").trim(),
+  };
+}
+
 function titleMatchScore(bookname: string, queryTitle: string) {
   if (!queryTitle.trim()) return 1;
 
@@ -211,44 +258,109 @@ function authorMatchScore(authors: string, queryAuthor: string) {
   return matched / tokens.length;
 }
 
-async function fetchNaverBooks(query: string) {
-  const apiUrl = new URL("https://openapi.naver.com/v1/search/book.json");
+async function fetchNaverBooks(query: string): Promise<SearchResult> {
+  try {
+    const apiUrl = new URL("https://openapi.naver.com/v1/search/book.json");
 
-  apiUrl.searchParams.set("query", query);
-  apiUrl.searchParams.set("display", "20");
-  apiUrl.searchParams.set("start", "1");
-  apiUrl.searchParams.set("sort", "sim");
+    apiUrl.searchParams.set("query", query);
+    apiUrl.searchParams.set("display", "20");
+    apiUrl.searchParams.set("start", "1");
+    apiUrl.searchParams.set("sort", "sim");
 
-  const response = await fetch(apiUrl.toString(), {
-    cache: "no-store",
-    headers: {
-      "X-Naver-Client-Id": env.NAVER_CLIENT_ID,
-      "X-Naver-Client-Secret": env.NAVER_CLIENT_SECRET,
-    },
-  });
+    const response = await fetch(apiUrl.toString(), {
+      cache: "no-store",
+      headers: {
+        "X-Naver-Client-Id": env.NAVER_CLIENT_ID,
+        "X-Naver-Client-Secret": env.NAVER_CLIENT_SECRET,
+      },
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text();
+    if (!response.ok) {
+      const errorText = await response.text();
+
+      return {
+        source: "naver",
+        query,
+        docs: [],
+        error: `네이버 책 검색 API 실패: ${response.status} ${errorText}`,
+      };
+    }
+
+    const data = await response.json();
+    const items = (data.items || []) as NaverBookItem[];
+
+    const docs = items
+      .map((item) => convertNaverBookToDoc(item))
+      .filter((doc): doc is BookDoc => doc !== null);
 
     return {
+      source: "naver",
       query,
-      docs: [] as BookDoc[],
-      error: `네이버 책 검색 API 실패: ${response.status} ${errorText}`,
+      docs,
+    };
+  } catch (error) {
+    return {
+      source: "naver",
+      query,
+      docs: [],
+      error: error instanceof Error ? error.message : String(error),
     };
   }
+}
 
-  const data = await response.json();
-  const items = (data.items || []) as NaverBookItem[];
+async function fetchData4LibraryBooks(query: string): Promise<SearchResult> {
+  try {
+    const apiUrl = new URL("https://data4library.kr/api/srchBooks");
 
-  const docs = items
-    .map((item) => convertNaverBookToDoc(item))
-    .filter((doc): doc is BookDoc => doc !== null);
+    apiUrl.searchParams.set("authKey", env.DATA4LIBRARY_API_KEY);
+    apiUrl.searchParams.set("keyword", query);
+    apiUrl.searchParams.set("pageNo", "1");
+    apiUrl.searchParams.set("pageSize", "30");
+    apiUrl.searchParams.set("format", "json");
 
-  return {
-    query,
-    docs,
-    error: "",
-  };
+    const response = await fetch(apiUrl.toString(), {
+      cache: "no-store",
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+
+      return {
+        source: "data4library",
+        query,
+        docs: [],
+        error: `도서관 정보나루 API 실패: ${response.status} ${errorText}`,
+      };
+    }
+
+    const data = await response.json();
+    const items = (data?.response?.docs || []) as Data4LibraryItem[];
+
+    const docs = items
+      .map((item) => convertData4LibraryBookToDoc(item))
+      .filter((doc): doc is BookDoc => doc !== null);
+
+    return {
+      source: "data4library",
+      query,
+      docs,
+    };
+  } catch (error) {
+    return {
+      source: "data4library",
+      query,
+      docs: [],
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function getValidSearchSource(value: string | null): SearchSource {
+  if (value === "naver" || value === "data4library" || value === "both") {
+    return value;
+  }
+
+  return "naver";
 }
 
 export async function GET(request: NextRequest) {
@@ -256,6 +368,7 @@ export async function GET(request: NextRequest) {
 
   const title = searchParams.get("title") || "";
   const author = searchParams.get("author") || "";
+  const source = getValidSearchSource(searchParams.get("source"));
 
   if (!title.trim() && !author.trim()) {
     return NextResponse.json(
@@ -274,17 +387,39 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const results = await Promise.all(
-      queries.map((query) => fetchNaverBooks(query))
-    );
+    const tasks: Promise<SearchResult>[] = [];
+
+    if (source === "naver" || source === "both") {
+      tasks.push(...queries.map((query) => fetchNaverBooks(query)));
+    }
+
+    if (source === "data4library" || source === "both") {
+      tasks.push(...queries.map((query) => fetchData4LibraryBooks(query)));
+    }
+
+    const results = await Promise.all(tasks);
 
     const bookMap = new Map<string, BookDoc>();
 
     for (const result of results) {
       for (const doc of result.docs) {
-        if (!bookMap.has(doc.isbn13)) {
+        const existing = bookMap.get(doc.isbn13);
+
+        if (!existing) {
           bookMap.set(doc.isbn13, doc);
+          continue;
         }
+
+        bookMap.set(doc.isbn13, {
+          ...existing,
+          ...doc,
+          bookImageURL: existing.bookImageURL || doc.bookImageURL,
+          loan_count: doc.loan_count || existing.loan_count,
+          class_nm:
+            doc.class_nm && doc.class_nm !== "네이버 책 검색 결과"
+              ? doc.class_nm
+              : existing.class_nm,
+        });
       }
     }
 
@@ -306,7 +441,16 @@ export async function GET(request: NextRequest) {
 
         return titleOk && authorOk;
       })
-      .sort((a, b) => b.score - a.score)
+      .sort((a, b) => {
+        const scoreDiff = b.score - a.score;
+
+        if (scoreDiff !== 0) return scoreDiff;
+
+        const loanA = Number(a.doc.loan_count || 0);
+        const loanB = Number(b.doc.loan_count || 0);
+
+        return loanB - loanA;
+      })
       .slice(0, 20);
 
     return NextResponse.json({
@@ -316,15 +460,17 @@ export async function GET(request: NextRequest) {
         })),
         numFound: scoredBooks.length,
       },
-      searchSource: "naver_book",
+      searchSource: source,
       searchCondition: {
         title,
         author,
+        source,
         queries,
       },
       failedQueries: results
         .filter((result) => result.error)
         .map((result) => ({
+          source: result.source,
           query: result.query,
           error: result.error,
         })),
@@ -334,7 +480,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(
       {
-        error: "네이버 책 검색 중 오류가 발생했습니다.",
+        error: "책 검색 중 오류가 발생했습니다.",
         detail: error instanceof Error ? error.message : String(error),
       },
       { status: 500 }
