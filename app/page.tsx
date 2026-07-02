@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 type SearchSource = "naver" | "data4library" | "both";
 
@@ -130,14 +130,31 @@ export default function Home() {
 
   const [result, setResult] = useState<ScoreResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingLabel, setLoadingLabel] = useState("");
+  const [loadingDots, setLoadingDots] = useState(".");
   const [message, setMessage] = useState("");
+  useEffect(() => {
+    if (!loading) {
+      setLoadingDots(".");
+      return;
+    }
 
+    const timer = setInterval(() => {
+      setLoadingDots((prev) => {
+        if (prev === ".") return "..";
+        if (prev === "..") return "...";
+        return ".";
+      });
+    }, 500);
+
+    return () => clearInterval(timer);
+  }, [loading]);
   async function searchBooks() {
     if (!title.trim() && !author.trim()) {
       setMessage("책 제목 또는 저자를 입력해주세요.");
       return;
     }
-
+    setLoadingLabel("책 검색 중");
     setLoading(true);
     setMessage("");
     setResult(null);
@@ -240,7 +257,7 @@ export default function Home() {
       setMessage("분석할 책을 선택해주세요.");
       return;
     }
-
+    setLoadingLabel("정보나루 키워드 및 AI 분석 중");
     setLoading(true);
     setMessage("");
     setResult(null);
@@ -304,7 +321,7 @@ export default function Home() {
       setMessage("책 소개/목차/서문 일부를 조금 더 길게 입력해주세요.");
       return;
     }
-
+    setLoadingLabel("입력 텍스트 AI 분석 중");
     setLoading(true);
     setMessage("");
     setResult(null);
@@ -605,7 +622,14 @@ export default function Home() {
 
         {loading && (
           <div className="mt-6 rounded-lg bg-gray-100 p-4">
-            분석 중입니다...
+            <div className="font-semibold">
+              {loadingLabel || "처리 중"}
+              {loadingDots}
+            </div>
+
+            <div className="mt-1 text-sm text-gray-500">
+              화면이 멈춘 것이 아니라 서버에서 결과를 처리하는 중입니다.
+            </div>
           </div>
         )}
 
