@@ -44,11 +44,11 @@ type ScoreResult = {
 };
 
 const categories = [
-  "사회/정치/법률",
-  "철학/역사/인류",
-  "자연과학/기술/미래",
-  "심리/교육/에세이",
+  "정치/경제/사회",
+  "과학/기술",
   "예술/문화",
+  "심리/에세이",
+  "인문/철학",
   "문학",
 ];
 
@@ -124,7 +124,7 @@ export default function Home() {
   const [books, setBooks] = useState<BookDoc[]>([]);
   const [selectedBook, setSelectedBook] = useState<BookDoc | null>(null);
 
-  const [targetCategory, setTargetCategory] = useState("자연과학/기술/미래");
+  const [targetCategory, setTargetCategory] = useState("정치/경제/사회");
   const [manualText, setManualText] = useState("");
   const [needsManualText, setNeedsManualText] = useState(false);
 

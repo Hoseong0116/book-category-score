@@ -126,11 +126,11 @@ async function analyzeManualTextWithClaude(params: {
 - 사용자가 선택한 목표 카테고리: ${params.targetCategory}
 
 목표 카테고리 목록:
-- 사회/정치/법률
-- 철학/역사/인류
-- 자연과학/기술/미래
-- 심리/교육/에세이
+- 정치/경제/사회
+- 과학/기술
 - 예술/문화
+- 심리/에세이
+- 인문/철학
 - 문학
 
 작업:
@@ -246,13 +246,13 @@ export async function POST(request: NextRequest) {
         {
           error: "targetCategory 값이 올바르지 않습니다.",
           allowedCategories: [
-            "사회/정치/법률",
-            "철학/역사/인류",
-            "자연과학/기술/미래",
-            "심리/교육/에세이",
-            "예술/문화",
-            "문학",
-          ],
+           "정치/경제/사회",
+           "과학/기술",
+           "예술/문화",
+           "심리/에세이",
+           "인문/철학",
+           "문학",
+         ],
         },
         { status: 400 }
       );
