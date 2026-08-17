@@ -115,6 +115,73 @@ function normalizeIsbnInput(value: string) {
   return "";
 }
 
+function calculateFinalScore(params: {
+  aiPercentage: number;
+  participantCount: string;
+  voteCount: string;
+  aiWeightPercent: string;
+}) {
+  const participant = Number(params.participantCount);
+  const votes = Number(params.voteCount);
+  const aiWeight = Number(params.aiWeightPercent);
+
+  if (!params.participantCount || !params.voteCount || !params.aiWeightPercent) {
+    return {
+      status: "empty" as const,
+      message:
+        "참여 인원수, 득표 인원수, AI 점수 반영 비율을 입력하면 최종 점수가 계산됩니다.",
+    };
+  }
+
+  if (!Number.isFinite(participant) || participant <= 0) {
+    return {
+      status: "error" as const,
+      message: "참여 인원수는 1명 이상이어야 합니다.",
+    };
+  }
+
+  if (!Number.isFinite(votes) || votes < 0) {
+    return {
+      status: "error" as const,
+      message: "득표 인원수는 0명 이상이어야 합니다.",
+    };
+  }
+
+  if (votes > participant) {
+    return {
+      status: "error" as const,
+      message: "득표 인원수는 참여 인원수보다 클 수 없습니다.",
+    };
+  }
+
+  if (!Number.isFinite(aiWeight) || aiWeight < 0 || aiWeight > 100) {
+    return {
+      status: "error" as const,
+      message: "AI 점수 반영 비율은 0~100 사이로 입력해주세요.",
+    };
+  }
+
+  const voteWeight = 100 - aiWeight;
+  const votePercentage = (votes / participant) * 100;
+
+  const aiWeightedScore = params.aiPercentage * (aiWeight / 100);
+  const voteWeightedScore = votePercentage * (voteWeight / 100);
+  const finalScore = aiWeightedScore + voteWeightedScore;
+
+  return {
+    status: "ok" as const,
+    participant,
+    votes,
+    aiWeight,
+    voteWeight,
+    aiPercentage: Number(params.aiPercentage.toFixed(1)),
+    votePercentage: Number(votePercentage.toFixed(1)),
+    aiWeightedScore: Number(aiWeightedScore.toFixed(1)),
+    voteWeightedScore: Number(voteWeightedScore.toFixed(1)),
+    finalScore: Number(finalScore.toFixed(1)),
+  };
+}
+
 export default function Home() {
   const [title, setTitle] = useState("");
   const [author, setAuthor] = useState("");
@@ -128,11 +195,16 @@ export default function Home() {
   const [manualText, setManualText] = useState("");
   const [needsManualText, setNeedsManualText] = useState(false);
 
+  const [participantCount, setParticipantCount] = useState("");
+  const [voteCount, setVoteCount] = useState("");
+  const [aiWeightPercent, setAiWeightPercent] = useState("30");
+
   const [result, setResult] = useState<ScoreResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingLabel, setLoadingLabel] = useState("");
   const [loadingDots, setLoadingDots] = useState(".");
   const [message, setMessage] = useState("");
+
   useEffect(() => {
     if (!loading) {
       setLoadingDots(".");
@@ -149,11 +221,40 @@ export default function Home() {
 
     return () => clearInterval(timer);
   }, [loading]);
+
+  const aiWeightForDisplay = (() => {
+    const value = Number(aiWeightPercent);
+
+    if (!aiWeightPercent.trim()) {
+      return 0;
+    }
+
+    if (!Number.isFinite(value) || value < 0 || value > 100) {
+      return 0;
+    }
+
+    return value;
+  })();
+
+  const aiWeightedDisplayScore = result
+    ? Number((result.score.percentage * (aiWeightForDisplay / 100)).toFixed(1))
+    : 0;
+
+  const finalScoreResult = result
+    ? calculateFinalScore({
+        aiPercentage: result.score.percentage,
+        participantCount,
+        voteCount,
+        aiWeightPercent,
+      })
+    : null;
+
   async function searchBooks() {
     if (!title.trim() && !author.trim()) {
       setMessage("책 제목 또는 저자를 입력해주세요.");
       return;
     }
+
     setLoadingLabel("책 검색 중");
     setLoading(true);
     setMessage("");
@@ -248,7 +349,7 @@ export default function Home() {
     setNeedsManualText(false);
     setManualText("");
     setMessage(
-      "ISBN이 선택되었습니다. 분석 카테고리를 선택한 뒤 정보나루 키워드로 분석하세요."
+      "ISBN이 선택되었습니다. 분석 카테고리를 선택하고 키워드 분석을 진행하세요."
     );
   }
 
@@ -257,7 +358,8 @@ export default function Home() {
       setMessage("분석할 책을 선택해주세요.");
       return;
     }
-    setLoadingLabel("정보나루 키워드 및 AI 분석 중");
+
+    setLoadingLabel("키워드 분석 중");
     setLoading(true);
     setMessage("");
     setResult(null);
@@ -321,6 +423,7 @@ export default function Home() {
       setMessage("책 소개/목차/서문 일부를 조금 더 길게 입력해주세요.");
       return;
     }
+
     setLoadingLabel("입력 텍스트 AI 분석 중");
     setLoading(true);
     setMessage("");
@@ -373,7 +476,7 @@ export default function Home() {
 
         <p className="mt-3 text-gray-600">
           책 제목, 저자, ISBN을 기준으로 도서를 찾고 선택한 카테고리에 대한
-          적합도 점수를 계산합니다.
+          적합도 점수와 투표 결과를 합산해 최종 점수를 계산합니다.
         </p>
 
         <section className="mt-8 rounded-xl bg-white p-6 shadow">
@@ -388,7 +491,7 @@ export default function Home() {
                   searchBooks();
                 }
               }}
-              placeholder="책 제목 예: 왜 나는 너를"
+              placeholder="책 제목 예: 코스모스"
               className="rounded-lg border px-4 py-2"
             />
 
@@ -400,7 +503,7 @@ export default function Home() {
                   searchBooks();
                 }
               }}
-              placeholder="저자 예: 알랭 드 보통"
+              placeholder="저자 예: 칼 세이건"
               className="rounded-lg border px-4 py-2"
             />
 
@@ -549,7 +652,7 @@ export default function Home() {
             <h2 className="text-xl font-semibold">3. 분석 카테고리 선택</h2>
 
             <div className="mt-3 rounded-lg bg-gray-100 p-4 text-sm text-gray-700">
-              <div className="font-semibold">선택된 도서</div>
+              <div className="font-semibold">선택한 도서</div>
               <div className="mt-1">{selectedBook.bookname}</div>
               <div className="mt-1">ISBN13: {selectedBook.isbn13}</div>
               {selectedBook.authors && (
@@ -577,13 +680,33 @@ export default function Home() {
               ))}
             </select>
 
-            <button
-              onClick={analyzeWithData4Library}
-              disabled={loading}
-              className="mt-4 rounded-lg bg-blue-600 px-5 py-2 text-white disabled:opacity-50"
-            >
-              정보나루 키워드로 분석
-            </button>
+            <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto]">
+              <div>
+                <label className="text-sm font-medium text-gray-700">
+                  AI 반영 비율(%)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={aiWeightPercent}
+                  onChange={(event) => setAiWeightPercent(event.target.value)}
+                  placeholder="예: 30"
+                  className="mt-1 w-full rounded-lg border px-4 py-2"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  예: 30을 입력하면 AI 점수는 30점 만점, 투표 점수는 70점 만점으로 계산됩니다.
+                </p>
+              </div>
+
+              <button
+                onClick={analyzeWithData4Library}
+                disabled={loading}
+                className="self-start rounded-lg bg-blue-600 px-5 py-2 text-white disabled:opacity-50 md:mt-6"
+              >
+                키워드 분석
+              </button>
+            </div>
           </section>
         )}
 
@@ -593,8 +716,8 @@ export default function Home() {
 
             <p className="mt-2 text-sm text-gray-600">
               교보문고, 알라딘, YES24 등의 책 소개, 목차, 출판사 서평, 서문
-              일부를 입력해주세요. 책 전문이나 긴 본문 전체는 넣지 않는 것을
-              권장합니다.
+              일부를 입력해주세요. 책 전문이나 긴 본문 전체를 넣는 것은
+              권장하지 않습니다.
             </p>
 
             <textarea
@@ -644,19 +767,95 @@ export default function Home() {
                 {result.targetCategory}
               </div>
 
-              <div className="mt-4 text-sm text-gray-600">최종 점수</div>
+              <div className="mt-4 text-sm text-gray-600">
+                AI 카테고리 적합도 반영 점수
+              </div>
 
               <div className="text-3xl font-bold">
-                {result.score.score30} / 30점
+                {aiWeightedDisplayScore} / {aiWeightForDisplay}점
               </div>
 
               <div className="mt-2 text-gray-600">
-                적합도 비율: {result.score.percentage}%
+                AI 반영 비율: {aiWeightForDisplay}% · AI 적합도 비율: {result.score.percentage}%
               </div>
 
               <div className="mt-2 text-sm text-gray-500">
-                유효 키워드 가중치 합: {result.score.totalValidWeight}
+                원점수: {result.score.score30} / 30점 · 유효 키워드 가중치 합: {result.score.totalValidWeight}
               </div>
+            </div>
+
+            <div className="mt-6 rounded-lg border p-5">
+              <h3 className="text-lg font-semibold">투표 점수 반영</h3>
+
+              <p className="mt-2 text-sm text-gray-600">
+                참여 인원수와 득표 인원수를 입력하면 위에서 설정한 AI 반영 비율을 기준으로
+                투표 반영 점수와 최종 점수가 자동 계산됩니다.
+              </p>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                <div>
+                  <label className="text-sm font-medium text-gray-700">
+                    참여 인원수
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={participantCount}
+                    onChange={(event) =>
+                      setParticipantCount(event.target.value)
+                    }
+                    placeholder="예: 20"
+                    className="mt-1 w-full rounded-lg border px-4 py-2"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-sm font-medium text-gray-700">
+                    득표 인원수
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={voteCount}
+                    onChange={(event) => setVoteCount(event.target.value)}
+                    placeholder="예: 15"
+                    className="mt-1 w-full rounded-lg border px-4 py-2"
+                  />
+                </div>
+              </div>
+
+              {finalScoreResult?.status === "ok" && (
+                <div className="mt-5 rounded-lg bg-blue-50 p-5">
+                  <div className="text-sm text-blue-800">최종 점수</div>
+
+                  <div className="mt-1 text-3xl font-bold text-blue-900">
+                    {finalScoreResult.finalScore} / 100점
+                  </div>
+
+                  <div className="mt-4 grid gap-2 text-sm text-blue-900 md:grid-cols-2">
+                    <div>AI 반영 비율: {finalScoreResult.aiWeight}%</div>
+                    <div>투표 반영 비율: {finalScoreResult.voteWeight}%</div>
+                    <div>
+                      AI 반영 점수: {finalScoreResult.aiWeightedScore}점
+                    </div>
+                    <div>
+                      투표 반영 점수: {finalScoreResult.voteWeightedScore}점
+                    </div>
+                    <div>AI 적합도: {finalScoreResult.aiPercentage}%</div>
+                    <div>투표율: {finalScoreResult.votePercentage}%</div>
+                    <div>
+                      득표: {finalScoreResult.votes} /{" "}
+                      {finalScoreResult.participant}명
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {finalScoreResult?.status !== "ok" && (
+                <div className="mt-4 rounded-lg bg-yellow-100 p-4 text-sm text-yellow-900">
+                  {finalScoreResult?.message}
+                </div>
+              )}
             </div>
 
             <h3 className="mt-6 font-semibold">키워드 평가</h3>
