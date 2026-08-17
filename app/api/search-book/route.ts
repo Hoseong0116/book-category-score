@@ -1,9 +1,5 @@
-// app/api/search-book/route.ts
-
 import { NextRequest, NextResponse } from "next/server";
 import { env } from "@/lib/env";
-
-type SearchSource = "naver" | "data4library" | "both";
 
 type BookDoc = {
   bookname: string;
@@ -14,17 +10,6 @@ type BookDoc = {
   class_nm: string;
   bookImageURL?: string;
   loan_count?: string;
-};
-
-type NaverBookItem = {
-  title?: string;
-  link?: string;
-  image?: string;
-  author?: string;
-  publisher?: string;
-  pubdate?: string;
-  isbn?: string;
-  description?: string;
 };
 
 type Data4LibraryItem = {
@@ -41,25 +26,13 @@ type Data4LibraryItem = {
 };
 
 type SearchResult = {
-  source: string;
   query: string;
   docs: BookDoc[];
   error?: string;
 };
 
-function stripHtml(value: string) {
-  return value
-    .replace(/<[^>]*>/g, "")
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&#39;/g, "'")
-    .trim();
-}
-
 function normalizeText(value: string) {
-  return stripHtml(value)
+  return value
     .trim()
     .toLowerCase()
     .replace(/[:：\-–—_/|()[\]{}「」『』《》〈〉,，.。!?！？=]/g, " ")
@@ -88,101 +61,82 @@ function uniqueValues(values: string[]) {
   );
 }
 
+function cleanSearchToken(token: string) {
+  return removeKoreanParticle(token)
+    .replace(/(이라는|라는|이란|란)$/g, "")
+    .trim();
+}
+
 function buildSearchQueries(title: string, author: string) {
   const normalizedTitle = normalizeText(title);
   const normalizedAuthor = normalizeText(author);
 
   const titleWords = splitWords(title);
 
-  const strippedWords = titleWords
-    .map((word) => removeKoreanParticle(word))
+  const cleanedTitleWords = titleWords
+    .map((word) => cleanSearchToken(word))
     .filter((word) => word.length >= 2);
 
-  const longestWord = [...titleWords, ...strippedWords]
+  const cleanedTitle = cleanedTitleWords.join(" ");
+
+  const longestWord = [...titleWords, ...cleanedTitleWords]
     .filter((word) => word.length >= 2)
     .sort((a, b) => b.length - a.length)[0];
 
-  const firstTwo = titleWords.slice(0, 2).join(" ");
-  const lastTwo = titleWords.slice(-2).join(" ");
+  const firstTwo = cleanedTitleWords.slice(0, 2).join(" ");
+  const lastTwo = cleanedTitleWords.slice(-2).join(" ");
+  const firstThree = cleanedTitleWords.slice(0, 3).join(" ");
 
   const queries: string[] = [];
 
+  // 1순위: 제목 + 저자
   if (normalizedTitle && normalizedAuthor) {
     queries.push(`${normalizedTitle} ${normalizedAuthor}`);
   }
 
+  // 2순위: 제목 전체
   if (normalizedTitle) {
     queries.push(normalizedTitle);
     queries.push(noSpace(normalizedTitle));
   }
 
-  if (lastTwo) {
-    queries.push(lastTwo);
+  // 3순위: 조사/어미 정리 제목
+  if (cleanedTitle && cleanedTitle !== normalizedTitle) {
+    queries.push(cleanedTitle);
+    queries.push(noSpace(cleanedTitle));
   }
 
-  if (longestWord) {
-    queries.push(longestWord);
+  // 4순위: 핵심 단어 조합
+  if (firstThree) {
+    queries.push(firstThree);
   }
 
   if (firstTwo) {
     queries.push(firstTwo);
   }
 
+  if (lastTwo) {
+    queries.push(lastTwo);
+  }
+
+  // 5순위: 핵심 단어 개별 검색
+  if (cleanedTitleWords.length > 0) {
+    queries.push(...cleanedTitleWords);
+  }
+
+  // 6순위: 가장 긴 단어
+  if (longestWord) {
+    queries.push(longestWord);
+  }
+
+  // 제목이 없고 저자만 있을 때
   if (!normalizedTitle && normalizedAuthor) {
     queries.push(normalizedAuthor);
   }
 
   return uniqueValues(queries)
     .filter((query) => query.length >= 2)
-    .slice(0, 4);
-}
-
-function extractIsbn13(isbnText: string | undefined) {
-  if (!isbnText) return "";
-
-  const candidates = isbnText
-    .split(/\s+/)
-    .map((value) => value.replace(/[^0-9X]/gi, ""))
-    .filter(Boolean);
-
-  const isbn13 = candidates.find((value) => /^97[89][0-9]{10}$/.test(value));
-
-  return isbn13 || "";
-}
-
-function getPublicationYear(pubdate: string | undefined) {
-  if (!pubdate) return "";
-
-  const onlyNumber = pubdate.replace(/[^0-9]/g, "");
-
-  if (onlyNumber.length >= 4) {
-    return onlyNumber.slice(0, 4);
-  }
-
-  return "";
-}
-
-function convertNaverBookToDoc(item: NaverBookItem): BookDoc | null {
-  const isbn13 = extractIsbn13(item.isbn);
-
-  if (!isbn13) return null;
-
-  const title = stripHtml(item.title || "");
-  const author = stripHtml(item.author || "");
-  const publisher = stripHtml(item.publisher || "");
-
-  if (!title) return null;
-
-  return {
-    bookname: title,
-    authors: author,
-    publisher,
-    publication_year: getPublicationYear(item.pubdate),
-    isbn13,
-    class_nm: "네이버 책 검색 결과",
-    bookImageURL: item.image || "",
-    loan_count: "",
-  };
+    .slice(0, 10);
 }
 
 function convertData4LibraryBookToDoc(item: Data4LibraryItem): BookDoc | null {
@@ -223,7 +177,7 @@ function titleMatchScore(bookname: string, queryTitle: string) {
   if (bookNoSpace.includes(queryNoSpace)) return 1;
 
   const tokens = splitWords(queryTitle)
-    .map((word) => removeKoreanParticle(word))
+    .map((word) => cleanSearchToken(word))
     .filter((word) => word.length >= 2);
 
   if (tokens.length === 0) return 0;
@@ -258,56 +212,6 @@ function authorMatchScore(authors: string, queryAuthor: string) {
   return matched / tokens.length;
 }
 
-async function fetchNaverBooks(query: string): Promise<SearchResult> {
-  try {
-    const apiUrl = new URL("https://openapi.naver.com/v1/search/book.json");
-
-    apiUrl.searchParams.set("query", query);
-    apiUrl.searchParams.set("display", "20");
-    apiUrl.searchParams.set("start", "1");
-    apiUrl.searchParams.set("sort", "sim");
-
-    const response = await fetch(apiUrl.toString(), {
-      cache: "no-store",
-      headers: {
-        "X-Naver-Client-Id": env.NAVER_CLIENT_ID,
-        "X-Naver-Client-Secret": env.NAVER_CLIENT_SECRET,
-      },
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-
-      return {
-        source: "naver",
-        query,
-        docs: [],
-        error: `네이버 책 검색 API 실패: ${response.status} ${errorText}`,
-      };
-    }
-
-    const data = await response.json();
-    const items = (data.items || []) as NaverBookItem[];
-
-    const docs = items
-      .map((item) => convertNaverBookToDoc(item))
-      .filter((doc): doc is BookDoc => doc !== null);
-
-    return {
-      source: "naver",
-      query,
-      docs,
-    };
-  } catch (error) {
-    return {
-      source: "naver",
-      query,
-      docs: [],
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
 async function fetchData4LibraryBooks(query: string): Promise<SearchResult> {
   try {
     const apiUrl = new URL("https://data4library.kr/api/srchBooks");
@@ -326,7 +230,6 @@ async function fetchData4LibraryBooks(query: string): Promise<SearchResult> {
       const errorText = await response.text();
 
       return {
-        source: "data4library",
         query,
         docs: [],
         error: `도서관 정보나루 API 실패: ${response.status} ${errorText}`,
@@ -341,13 +244,11 @@ async function fetchData4LibraryBooks(query: string): Promise<SearchResult> {
       .filter((doc): doc is BookDoc => doc !== null);
 
     return {
-      source: "data4library",
       query,
       docs,
     };
   } catch (error) {
     return {
-      source: "data4library",
       query,
       docs: [],
       error: error instanceof Error ? error.message : String(error),
@@ -355,20 +256,11 @@ async function fetchData4LibraryBooks(query: string): Promise<SearchResult> {
   }
 }
 
-function getValidSearchSource(value: string | null): SearchSource {
-  if (value === "naver" || value === "data4library" || value === "both") {
-    return value;
-  }
-
-  return "naver";
-}
-
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
 
   const title = searchParams.get("title") || "";
   const author = searchParams.get("author") || "";
-  const source = getValidSearchSource(searchParams.get("source"));
 
   if (!title.trim() && !author.trim()) {
     return NextResponse.json(
@@ -387,17 +279,9 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const tasks: Promise<SearchResult>[] = [];
-
-    if (source === "naver" || source === "both") {
-      tasks.push(...queries.map((query) => fetchNaverBooks(query)));
-    }
-
-    if (source === "data4library" || source === "both") {
-      tasks.push(...queries.map((query) => fetchData4LibraryBooks(query)));
-    }
-
-    const results = await Promise.all(tasks);
+    const results = await Promise.all(
+      queries.map((query) => fetchData4LibraryBooks(query))
+    );
 
     const bookMap = new Map<string, BookDoc>();
 
@@ -415,10 +299,7 @@ export async function GET(request: NextRequest) {
           ...doc,
           bookImageURL: existing.bookImageURL || doc.bookImageURL,
           loan_count: doc.loan_count || existing.loan_count,
-          class_nm:
-            doc.class_nm && doc.class_nm !== "네이버 책 검색 결과"
-              ? doc.class_nm
-              : existing.class_nm,
+          class_nm: doc.class_nm || existing.class_nm,
         });
       }
     }
@@ -436,10 +317,22 @@ export async function GET(request: NextRequest) {
         };
       })
       .filter((item) => {
-        const titleOk = title.trim() ? item.titleScore >= 0.25 : true;
-        const authorOk = author.trim() ? item.authorScore >= 0.25 : true;
+        const hasTitle = title.trim().length > 0;
+        const hasAuthor = author.trim().length > 0;
 
-        return titleOk && authorOk;
+        if (hasTitle && hasAuthor) {
+          return item.titleScore >= 0.2 && item.authorScore >= 0.15;
+        }
+
+        if (hasTitle) {
+          return item.titleScore >= 0.2;
+        }
+
+        if (hasAuthor) {
+          return item.authorScore >= 0.15;
+        }
+
+        return false;
       })
       .sort((a, b) => {
         const scoreDiff = b.score - a.score;
@@ -460,17 +353,17 @@ export async function GET(request: NextRequest) {
         })),
         numFound: scoredBooks.length,
       },
-      searchSource: source,
+      searchSource: "data4library",
       searchCondition: {
         title,
         author,
-        source,
+        source: "data4library",
         queries,
       },
       failedQueries: results
         .filter((result) => result.error)
         .map((result) => ({
-          source: result.source,
+          source: "data4library",
           query: result.query,
           error: result.error,
         })),
